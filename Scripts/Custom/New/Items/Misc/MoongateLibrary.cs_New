@@ -1,0 +1,379 @@
+using System;
+using System.IO;
+using System.Collections.Generic;
+using Server;
+using Server.Gumps;
+using Server.Network;
+using Server.Mobiles;
+using Server.Multis;
+using Server.Targeting;
+using Server.Regions;
+using Server.Spells;
+
+namespace Server.Items
+{
+	[Flags]
+	public enum FormatOptions
+	{
+		None		= 0x00,
+		Bold		= 0x01,
+		Italics		= 0x02,
+		Underline	= 0x04,
+		Center		= 0x08
+	}
+
+	[Flags]
+	public enum GateOptions
+	{
+		None			= 0x0000,
+		Reds			= 0x0001,
+		NonReds			= 0x0002,
+		Guild			= 0x0004,
+		Faction			= 0x0008,
+		Coowners		= 0x0010,
+		Friends			= 0x0020,
+		Everyone		= 0x0003, //Reds | NonReds
+		ShowWarning		= 0x0040
+	}
+
+	public class MoongateLocation
+	{
+		private string m_Name;
+		private Point3D m_Target;
+		private Map m_TargetMap;
+		private GateOptions m_Flags;
+		private string m_Password;
+
+		public string Name{ get{ return m_Name; } set{ m_Name = value; } }
+		public Point3D Target{ get{ return m_Target; } set{ m_Target = value; } }
+		public Map TargetMap{ get{ return m_TargetMap; } set{ m_TargetMap = value; } }
+		public GateOptions Flags{ get{ return m_GateOptions; } set{ m_GateOptions = value; } }
+		public string Password{ get{ return m_Password; } set{ m_Password = value; } }
+
+		public bool Reds{ get{ return GetFlag( GateOptions.Reds ); } set{ SetFlag( GateOptions.Reds | GateOptions.Everyone, value ); } }
+		public bool NonReds{ get{ return GetFlag( GateOptions.NonReds ); } set{ SetFlag( GateOptions.NonReds | GateOptions.Everyone, value ); } }
+		public bool Guild{ get{ return GetFlag( GateOptions.Guild ); } set{ SetFlag( GateOptions.Guild | GateOptions.Everyone, value ); } }
+		public bool Faction{ get{ return GetFlag( GateOptions.Faction ); } set{ SetFlag( GateOptions.Faction | GateOptions.Everyone, value ); } }
+		public bool Coowners{ get{ return GetFlag( GateOptions.Coowners ); } set{ SetFlag( GateOptions.Coowners | GateOptions.Everyone, value ); } }
+		public bool Friends{ get{ return GetFlag( GateOptions.Friends ); } set{ SetFlag( GateOptions.Friends | GateOptions.Everyone, value ); } }
+		public bool ShowWarning{ get{ return GetFlag( GateOptions.ShowWarning ); } set{ SetFlag( GateOptions.ShowWarning, value ); } }
+
+		public bool GetFlag( GateOptions flag )
+		{
+			return ( (m_Flags & flag) != 0 );
+		}
+
+		public void SetFlag( GateOptions flag, bool value )
+		{
+			if ( value )
+				m_Flags |= flag;
+			else
+				m_Flags &= ~flag;
+		}
+
+		public bool HasPassword()
+		{
+			return !String.IsNullOrEmpty( m_Password );
+		}
+
+		public bool MatchPassword( string match )
+		{
+			return String.IsNullOrEmpty( m_Password ) || m_Password == match;
+		}
+
+		public MoongateLocationEntry() : base()
+		{
+		}
+
+		public void Deserialize( GenericReader reader )
+		{
+			int version = reader.ReadEncodedInt();
+
+			m_Name = reader.ReadString();
+			m_Target = reader.ReadPoint3D();
+			m_TargetMap = reader.ReadMap();
+			m_Flags = (GateOptions)reader.ReadEncodedInt();
+			m_Password = reader.ReadString();
+		}
+		
+		public void Serialize( GenericWriter writer )
+		{
+			writer.WriteEncodedInt( (int)0 ); // version
+
+			writer.Write( m_Name );
+			writer.Write( m_Target );
+			writer.Write( m_TargetMap );
+			writer.WriteEncodedInt( (int)m_Flags );
+			writer.Write( m_Password );
+		}
+	}
+
+	public class MoongateLocationEntry : MoongateEntry
+	{
+		private List<MoongateLocation> m_Locations;
+
+		public List<MoongateLocation> Locations{ get{ return m_Locations; } set{ m_Locations = value; } }
+
+		public MoongateEntryCollection()
+		{
+			m_Locations = new List<MoongateEntry>();
+		}
+
+		public void ShiftUp( int entry )
+		{
+			if ( entry > 0 && entry < m_Locations.Count )
+			{
+				MoongateLocation loc = m_Locations[entry];
+				m_Locations[entry] = m_Locations[entry - 1];
+				m_Locations[entry - 1] = loc;
+			}
+		}
+
+		public void ShiftDown( int entry )
+		{
+			if ( entry >= 0 && entry < m_Locations.Count-1 )
+			{
+				MoongateLocation loc = m_Locations[entry];
+				m_Locations[entry] = m_Locations[entry + 1];
+				m_Locations[entry + 1] = loc;
+			}
+		}
+
+		public override void Deserialize( GenericReader reader )
+		{
+			int version = reader.ReadEncodedInt();
+
+			m_Name = reader.ReadString();
+
+			int count = reader.ReadEncodedInt();
+
+			for ( int i = 0;i < count; i++ )
+			{
+				MoongateLocation loc = new MoongateLocation();
+				loc.Deserialize( reader );
+				m_Locations.Add( loc );
+			}
+		}
+		
+		public override void Serialize( GenericWriter writer )
+		{
+			writer.WriteEncodedInt( (int)0 ); // version
+
+			writer.Write( m_Name );
+
+			writer.WriteEncodedInt( m_Locations.Count );
+
+			for ( int i = 0;i < m_Locations.Count; i++ )
+				m_Locations[i].Serialize( writer );
+		}
+	}
+
+	public class MoongateEntry
+	{
+		private int m_Color; //R/G/B
+		private int m_SelectedColor;
+		private FormatOptions m_Formatting;
+		private string m_Name;
+
+		public int Color{ get{ return m_Color; } set{ m_Color = value; } }
+		public int SelectedColor{ get{ return m_SelectedColor; } set{ m_SelectedColor = value; } }
+		public FormatOptions Formatting{ get{ return m_Formatting; } set{ m_Formatting = value; } }
+		public string Name{ get{ return m_Name; } set{ m_Name = value; } }
+
+		public MoongateEntry()
+		{
+		}
+
+		public string GetFormattedName()
+		{
+			return GetFormattedName( false );
+		}
+
+		public string GetFormattedName( bool selected )
+		{
+			string name = m_Name;
+
+			if ( ( m_Formatting & FormatOptions.Bold ) != 0 )
+				name = String.Format( "<B>{0}</B>", name );
+
+			if ( ( m_Formatting & FormatOptions.Italics ) != 0 )
+				name = String.Format( "<I>{0}</I>", name );
+
+			if ( ( m_Formatting & FormatOptions.Underline ) != 0 )
+				name = String.Format( "<U>{0}</U>", name );
+
+				name = String.Format( "<COLOR=#{1}>{0}</B>", name, selected ? m_SelectedColor : m_Color );
+
+			if ( ( m_Formatting & FormatOptions.Center ) != 0 )
+				name = String.Format( "<CENTER>{0}</CENTER>", name );
+
+			return name;
+		}
+
+		public override void Deserialize( GenericReader reader )
+		{
+			int version = reader.ReadEncodedInt();
+
+			m_Color = reader.ReadInt();
+			m_SelectedColor = reader.ReadInt();
+			m_Formatting = (FormatOptions)reader.ReadEncodedInt();
+			m_Name = reader.ReadString();
+		}
+		
+		public override void Serialize( GenericWriter writer )
+		{
+			writer.WriteEncodedInt( (int)0 ); // version
+
+			writer.Write( m_Color );
+			writer.Write( m_SelectedColor );
+			writer.WriteEncodedInt( (int)m_Formatting );
+			writer.Write( m_Name );
+		}
+	}
+
+	public class MoongateLibraryNew : Item
+	{
+		public static readonly Cost = 25;
+
+		private bool m_Active;
+		private Account m_Account;
+		private List<MoongateEntry> m_Entries;
+
+		public bool Active{ get{ return m_Active; } set{ m_Active = value; } }
+		public Account Account{ get{ return m_Account; } set{ m_Account = value; } }
+		public List<MoongateEntry> Entries{ get{ return m_Entries; } }
+
+		public MoongateLibraryNew() : base( 0xF6C )
+		{
+			m_Entries = new List<MoongateEntry>();
+		}
+
+		public MoongateLibraryNew( Serial serial ) : base( serial )
+		{
+			m_Entries = new List<MoongateEntry>();
+		}
+
+		public override void OnDoubleClick( Mobile from )
+		{
+			if ( from.Player )
+			{
+				if ( from.InRange( GetWorldLocation(), 1 ) )
+					UseGate( from );
+				else
+					from.SendLocalizedMessage( 500446 ); // That is too far away.
+			}
+		}
+
+		public override bool OnMoveOver( Mobile m )
+		{
+			// Changed so criminals are not blocked by it.
+			if ( m.Player )
+				UseGate( m );
+
+			return true;
+		}
+
+		public override bool HandlesOnMovement{ get{ return true; } }
+
+		public override void OnMovement( Mobile m, Point3D oldLocation )
+		{
+			if ( m is PlayerMobile )
+			{
+				if ( !Utility.InRange( m.Location, this.Location, 1 ) && Utility.InRange( oldLocation, this.Location, 1 ) )
+				{
+					m.CloseGump( typeof( MoongateGump ) );
+					m.CloseGump( typeof( MoongateLibraryGump ) );
+				}
+			}
+		}
+
+		public bool UseGate( Mobile m )
+		{
+			m.CloseGump( typeof( MoongateLibraryGump ) );
+			m.CloseGump( typeof( MoongateGump ) );
+			m.SendGump( new MoongateLibraryGump( m, this ) );
+
+//			if ( !m.Hidden || m.AccessLevel == AccessLevel.Player )
+//				Effects.PlaySound( m.Location, m.Map, 0x20E );
+
+			return true;
+		}
+
+		public void ShiftUp( int entry )
+		{
+			if ( entry > 0 && entry < m_Entries.Count )
+			{
+				MoongateEntry c = m_Entries[entry];
+				m_Entries[entry] = m_Entries[entry - 1];
+				m_Entries[entry - 1] = c;
+			}
+		}
+
+		public void ShiftDown( int entry )
+		{
+			if ( entry >= 0 && entry < m_Entries.Count-1 )
+			{
+				MoongateEntry c = m_Entries[entry];
+				m_Entries[entry] = m_Entries[entry + 1];
+				m_Entries[entry + 1] = c;
+			}
+		}
+
+		public bool IsOwner( Mobile from )
+		{
+			return from.AccessLevel >= AccessLevel.GameMaster || from.Account == m_Account;
+		}
+
+		public override void Deserialize( GenericReader reader )
+		{
+
+		}
+
+		public override void Serialize( GenericWriter writer )
+		{
+
+		}
+	}
+
+	public class MoongateLibraryGump : Gump
+	{
+		private Mobile m_From;
+		private MoongateLibrary m_Library;
+
+		public MoongateLibraryGump( Mobile from, MoongateLibrary library, int page, int collsel, int locsel ) : base( 50, 50 )
+		{
+			bool isOwner = m_Library.IsOwner( from );
+
+			AddPage( 0 );
+
+			AddBackground( 0, 0, 380, 455, 5054 );
+
+			AddButton( 10, 210, 4005, 4007, 1, GumpButtonType.Reply, 0 );
+			AddHtmlLocalized( 45, 385, 140, 25, 1011036, false, false ); // OKAY
+
+			AddButton( 10, 235, 4005, 4007, 0, GumpButtonType.Reply, 0 );
+			AddHtmlLocalized( 45, 412, 140, 25, 1011012, false, false ); // CANCEL
+
+			AddHtmlLocalized( 5, 5, 200, 20, 1012011, false, false ); // Pick your destination:
+
+			AddHtml( 165, 5, 100, 20, String.Format( "Cost: {0}gp", m_Library.Cost ), false, false );
+
+			if ( page > 0 )
+				AddButton( 340, 5, 0x15E3, 0x15E7, 1, GumpButtonType.Reply, 0 );
+			
+			if ( page < 6 )
+				AddButton( 360, 5, 0x15E1, 0x15E5, 2, GumpButtonType.Reply, 0 );
+
+			if ( m_Library.Entries.Count > 0 )
+			{
+				for ( int i = 0; i < m_Library.Entries.Count; ++i )
+				{
+					if ( m_Library.Entries[i] is MoongateLocationEntry )
+						AddButton( 10, 35 + (i * 25), 2117, 2118, ( i + 10 ), GumpButtonType.Reply, 0 );
+
+					AddHtml( 30, 35 + (i * 25), 150, 20, String.Format( "{0}", m_Library.Entries[i].GetFormattedName( collsel ) ), false, false );
+				}
+			}
+		}
+	}
+}
